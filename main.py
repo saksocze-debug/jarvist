@@ -1,4 +1,4 @@
-eimport os, time, collections
+import os, time, asyncio, collections
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
@@ -35,23 +35,31 @@ def healthz():
 
 
 BASE = "https://generativelanguage.googleapis.com/v1beta"
-BAD = ("lite", "image", "tts", "live", "embed", "audio", "robotics", "computer", "vision")
+SKIP = ("image", "tts", "live", "embed", "audio", "robotics", "computer", "vision")
+RETRY = (404, 429, 500, 503)
 _model = None
+_models = None
 
 
-async def pick_model(c: httpx.AsyncClient):
-    """Bu anahtarla gerçekten çalışan en yeni Flash modelini bulur."""
+async def usable(c: httpx.AsyncClient) -> list:
+    """Bu anahtarla çalışan modeller: önce Flash, sonra Lite, sonra diğerleri."""
+    global _models
+    if _models:
+        return _models
     r = await c.get(f"{BASE}/models", params={"pageSize": 200}, headers={"x-goog-api-key": API_KEY})
     if r.status_code != 200:
-        return None
+        return []
     names = []
     for m in r.json().get("models", []):
         n = m.get("name", "").removeprefix("models/")
         if ("generateContent" in m.get("supportedGenerationMethods", [])
-                and n.startswith("gemini") and not any(b in n for b in BAD)):
+                and n.startswith("gemini") and not any(x in n for x in SKIP)):
             names.append(n)
-    flash = sorted([n for n in names if "flash" in n], reverse=True)
-    return (flash or sorted(names, reverse=True) or [None])[0]
+    flash = sorted([n for n in names if "flash" in n and "lite" not in n], reverse=True)
+    lite = sorted([n for n in names if "lite" in n], reverse=True)
+    rest = sorted([n for n in names if n not in flash and n not in lite], reverse=True)
+    _models = flash + lite + rest
+    return _models
 
 
 def gerr(r: httpx.Response) -> str:
@@ -80,19 +88,32 @@ async def chat(body: Chat, req: Request):
         "generationConfig": {"temperature": 0.8},
     }
     hdr = {"x-goog-api-key": API_KEY}
+    r, model = None, _model or MODEL
     try:
-        async with httpx.AsyncClient(timeout=40) as c:
-            model = _model or MODEL
-            r = await c.post(f"{BASE}/models/{model}:generateContent", json=payload, headers=hdr)
-            if r.status_code == 404:
-                found = await pick_model(c)
-                if found and found != model:
-                    _model = model = found
-                    r = await c.post(f"{BASE}/models/{model}:generateContent", json=payload, headers=hdr)
+        async with httpx.AsyncClient(timeout=30) as c:
+            cands = [model]
+            for i in range(5):
+                if i >= len(cands):
+                    extra = [m for m in await usable(c) if m not in cands]
+                    if not extra:
+                        break
+                    cands += extra[:4]
+                model = cands[i]
+                r = await c.post(f"{BASE}/models/{model}:generateContent", json=payload, headers=hdr)
+                if r.status_code == 200:
+                    _model = model
+                    break
+                if r.status_code not in RETRY:
+                    break
+                await asyncio.sleep(0.7)
     except httpx.HTTPError:
         raise HTTPException(502, "Gemini'ye ulaşılamadı.")
-    if r.status_code != 200:
-        raise HTTPException(502, f"Gemini {r.status_code} ({model}): {gerr(r)}")
+    if r is None or r.status_code != 200:
+        code = r.status_code if r is not None else "?"
+        msg = gerr(r) if r is not None else ""
+        if code == 503:
+            msg = "Google sunucuları şu an yoğun, birkaç saniye sonra tekrar dene."
+        raise HTTPException(502, f"Gemini {code}: {msg}")
     try:
         parts = r.json()["candidates"][0]["content"]["parts"]
         text = "".join(p.get("text", "") for p in parts).strip()
