@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>MARK — Holografik Asistan</title>
+<style>
+:root{--c:#00e5ff;--bg:#02060d;--tx:#d8f6ff}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:radial-gradient(ellipse at 50% 35%,#06182a,var(--bg) 70%);color:var(--tx);font-family:ui-monospace,Menlo,Consolas,monospace;overflow:hidden}
+#cv{position:fixed;inset:0;width:100%;height:100%}
+body::after{content:"";position:fixed;inset:0;pointer-events:none;background:repeating-linear-gradient(0deg,rgba(0,229,255,.05) 0 1px,transparent 1px 3px);mix-blend-mode:screen}
+#top{position:fixed;top:env(safe-area-inset-top,0);left:0;right:0;padding:14px;text-align:center;letter-spacing:.35em;font-size:12px;opacity:.85}
+#st{display:block;margin-top:4px;font-size:10px;letter-spacing:.2em;color:var(--c)}
+#ui{position:fixed;left:0;right:0;bottom:0;padding:12px 12px calc(12px + env(safe-area-inset-bottom,0));max-width:640px;margin:auto}
+#log{max-height:26vh;overflow-y:auto;margin-bottom:10px;font-size:13px;line-height:1.45}
+.m{margin:6px 0;padding:8px 10px;border-left:2px solid var(--c);background:rgba(0,229,255,.06);border-radius:0 8px 8px 0;white-space:pre-wrap}
+.m.user{border-color:#ff4fd8;background:rgba(255,79,216,.07);text-align:right;border-radius:8px 0 0 8px;border-left:0;border-right:2px solid #ff4fd8}
+#bar{display:flex;gap:8px}
+input{flex:1;min-width:0;background:rgba(0,20,35,.7);border:1px solid rgba(0,229,255,.4);color:var(--tx);padding:12px;border-radius:10px;font:inherit;font-size:16px;outline:none}
+input:focus{border-color:var(--c);box-shadow:0 0 12px rgba(0,229,255,.4)}
+button{background:rgba(0,229,255,.1);border:1px solid rgba(0,229,255,.5);color:var(--c);width:46px;border-radius:10px;font-size:18px;cursor:pointer}
+button.on{background:rgba(61,255,154,.25);border-color:#3dff9a;color:#3dff9a}
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<div id="top">M A R K<span id="st">HAZIR</span></div>
+<div id="ui">
+  <div id="log"></div>
+  <div id="bar">
+    <input id="in" placeholder="Bir şey yaz veya mikrofona bas…" autocomplete="off" enterkeyhint="send">
+    <button id="mic" title="Konuş">🎙</button>
+    <button id="vo" class="on" title="Sesli cevap">🔊</button>
+    <button id="go" title="Gönder">➤</button>
+  </div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+const LABEL={idle:'HAZIR',listening:'DİNLİYORUM',thinking:'DÜŞÜNÜYORUM',speaking:'KONUŞUYORUM'};
+const COL={idle:0x00e5ff,listening:0x3dff9a,thinking:0xffb020,speaking:0xff4fd8};
+const SPD={idle:.25,listening:.5,thinking:2.2,speaking:.9};
+let state='idle';
+function setState(s){state=s;$('st').textContent=LABEL[s]}
+
+/* ---------- 3D / 4D hologram ---------- */
+const R=new THREE.WebGLRenderer({canvas:$('cv'),antialias:true,alpha:true});
+R.setPixelRatio(Math.min(devicePixelRatio,2));
+const S=new THREE.Scene(),C=new THREE.PerspectiveCamera(55,1,.1,50);C.position.set(0,.3,6);
+const add=(m)=>{m.userData={};return m};
+const mat=(o)=>new THREE.LineBasicMaterial(Object.assign({color:0x00e5ff,transparent:true,opacity:.9,blending:THREE.AdditiveBlending,depthWrite:false},o));
+const G=new THREE.Group();S.add(G);
+// tesseract (4D hypercube)
+const V=[],E=[];
+for(let i=0;i<16;i++)V.push([i&1?1:-1,i&2?1:-1,i&4?1:-1,i&8?1:-1]);
+for(let i=0;i<16;i++)for(let b=0;b<4;b++){const j=i^(1<<b);if(i<j)E.push([i,j])}
+const tg=new THREE.BufferGeometry();
+tg.setAttribute('position',new THREE.BufferAttribute(new Float32Array(E.length*6),3));
+const tess=new THREE.LineSegments(tg,mat());G.add(tess);
+// inner core + particle shell + floor rings
+const core=new THREE.LineSegments(new THREE.WireframeGeometry(new THREE.IcosahedronGeometry(.8,1)),mat({opacity:.6}));G.add(core);
+const N=1600,pp=new Float32Array(N*3);
+for(let i=0;i<N;i++){const u=Math.random()*2-1,t=Math.random()*6.283,r=2.5+Math.random()*.5,s=Math.sqrt(1-u*u);pp[i*3]=r*s*Math.cos(t);pp[i*3+1]=r*u;pp[i*3+2]=r*s*Math.sin(t)}
+const pg=new THREE.BufferGeometry();pg.setAttribute('position',new THREE.BufferAttribute(pp,3));
+const pts=new THREE.Points(pg,new THREE.PointsMaterial({color:0x00e5ff,size:.035,transparent:true,opacity:.8,blending:THREE.AdditiveBlending,depthWrite:false}));G.add(pts);
+const rings=[];
+for(let i=0;i<3;i++){const m=new THREE.Mesh(new THREE.RingGeometry(1.6+i*.55,1.62+i*.55,96),new THREE.MeshBasicMaterial({color:0x00e5ff,transparent:true,opacity:.5-i*.12,side:2,blending:THREE.AdditiveBlending,depthWrite:false}));m.rotation.x=-Math.PI/2;m.position.y=-2.4;S.add(m);rings.push(m)}
+function resize(){const w=innerWidth,h=innerHeight;R.setSize(w,h,false);C.aspect=w/h;C.position.z=w/h<.8?8:6;C.updateProjectionMatrix()}
+addEventListener('resize',resize);resize();
+
+const tgt=new THREE.Color(),clock=new THREE.Clock();
+let a=0,amp=1,tt=0;
+function rot(v,i,j,x){const c=Math.cos(x),s=Math.sin(x),p=v[i],q=v[j];return[p*c-q*s,p*s+q*c]}
+function frame(){
+  const dt=Math.min(clock.getDelta(),.05);tt+=dt;a+=dt*SPD[state];
+  const P=tg.attributes.position.array;
+  const pr=V.map(v=>{let w=v.slice();
+    [w[0],w[3]]=rot(w,0,3,a);[w[1],w[2]]=rot(w,1,2,a*.7);[w[0],w[2]]=rot(w,0,2,a*.4);
+    const k=2.1/(3-w[3]);return[w[0]*k,w[1]*k,w[2]*k]});
+  E.forEach((e,i)=>{const p=pr[e[0]],q=pr[e[1]];P.set(p,i*6);P.set(q,i*6+3)});
+  tg.attributes.position.needsUpdate=true;
+  const want=state==='speaking'?1+.1*Math.sin(tt*13)*Math.sin(tt*3.1)+.05*Math.sin(tt*29):state==='thinking'?.85+.05*Math.sin(tt*8):1+.02*Math.sin(tt*1.5);
+  amp+=(want-amp)*.2;G.scale.setScalar(amp);
+  G.rotation.y+=dt*.15;G.position.y=Math.sin(tt*.9)*.08;
+  core.rotation.x-=dt*.6;core.rotation.y+=dt*.8;pts.rotation.y-=dt*.1;
+  tgt.setHex(COL[state]);[tess.material,core.material,pts.material].forEach(m=>m.color.lerp(tgt,.08));
+  rings.forEach((r,i)=>{r.material.color.lerp(tgt,.08);r.scale.setScalar(1+.06*Math.sin(tt*2+i))});
+  document.documentElement.style.setProperty('--c','#'+tess.material.color.getHexString());
+  R.render(S,C);requestAnimationFrame(frame)}
+frame();
+
+/* ---------- Chat, ses, mikrofon ---------- */
+const hist=[];let voiceOn=true;
+function line(role,text){const d=document.createElement('div');d.className='m '+role;d.textContent=text;$('log').appendChild(d);$('log').scrollTop=1e9}
+function speak(t){
+  if(!voiceOn||!('speechSynthesis' in window)){setState('idle');return}
+  speechSynthesis.cancel();
+  const u=new SpeechSynthesisUtterance(t.replace(/[*_`#>]/g,''));
+  u.lang=/[çğıöşü]/i.test(t)?'tr-TR':(document.documentElement.lang||'tr-TR');
+  u.onstart=()=>setState('speaking');u.onend=u.onerror=()=>setState('idle');
+  speechSynthesis.speak(u)}
+async function send(text){
+  text=(text||'').trim();if(!text)return;
+  speechSynthesis.cancel();$('in').value='';line('user',text);
+  hist.push({role:'user',text});setState('thinking');
+  const m=hist.slice(-12);while(m.length&&m[0].role!=='user')m.shift();
+  try{
+    const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messages:m})});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok)throw new Error(d.detail||'Bir hata oluştu ('+r.status+')');
+    hist.push({role:'model',text:d.reply});line('ai',d.reply);speak(d.reply);
+  }catch(e){hist.pop();line('ai','⚠ '+e.message);setState('idle')}}
+$('go').onclick=()=>send($('in').value);
+$('in').onkeydown=e=>{if(e.key==='Enter')send($('in').value)};
+$('vo').onclick=()=>{voiceOn=!voiceOn;$('vo').classList.toggle('on',voiceOn);if(!voiceOn)speechSynthesis.cancel()};
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+if(!SR)$('mic').style.display='none';else{
+  const rec=new SR();rec.lang='tr-TR';rec.interimResults=false;let got=false;
+  rec.onresult=e=>{got=true;send(e.results[0][0].transcript)};
+  rec.onerror=()=>{$('mic').classList.remove('on');if(state==='listening')setState('idle')};
+  rec.onend=()=>{$('mic').classList.remove('on');if(state==='listening'&&!got)setState('idle')};
+  $('mic').onclick=()=>{
+    if($('mic').classList.contains('on')){rec.stop();return}
+    speechSynthesis.cancel();got=false;
+    try{rec.start();$('mic').classList.add('on');setState('listening')}catch(e){}}}
+line('ai','Merhaba, ben MARK. Yazabilir ya da mikrofona basıp konuşabilirsin.');
+</script>
+</body>
+</html>
